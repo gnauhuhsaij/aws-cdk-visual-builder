@@ -9,9 +9,12 @@ import {
   type Connection,
   type EdgeChange,
   type NodeChange,
+  type Viewport,
 } from '@xyflow/react';
 import { Canvas } from './components/Canvas';
 import { CodeModal } from './components/CodeModal';
+import { GuideModal } from './components/GuideModal';
+import { ProjectWalkthrough } from './components/ProjectWalkthrough';
 import { Inspector } from './components/Inspector';
 import { Sidebar } from './components/Sidebar';
 import { Toolbar } from './components/Toolbar';
@@ -19,9 +22,10 @@ import { ValidationPanel } from './components/ValidationPanel';
 import { resourceByType } from './data/awsResources';
 import { generateCdkProject } from './generator/generateCdkProject';
 import { parseCdkStack } from './parser/parseCdkStack';
-import { getDefaultCdkAction } from './rules/cdkActions';
+import { getDefaultCdkAction, getDefaultConnectionType } from './rules/cdkActions';
 import { validateGraph } from './rules/validateGraph';
 import type { AwsResourceType, GraphModel, InfraEdge, InfraNode, SavedProjectSummary, ValidationIssue } from './types';
+import { allowsPracticeConnection, canContinueWalkthrough, expectedResource, nextWalkthroughStep, practiceNodeIds, practiceResources, type WalkthroughStepId } from './walkthrough/defaultProject';
 
 const BOARD_STORAGE_KEY = 'infracanvas.board.v1';
 const PROJECTS_STORAGE_KEY = 'infracanvas.projects.v1';
@@ -121,7 +125,9 @@ function decorateEdges(edges: InfraEdge[], issues: ValidationIssue[], graphNodes
   const routedEdges = routeEdges(edges, graphNodes);
 
   return routedEdges.map((edge) => {
-    const validation = issues.find((issue) => issue.edgeId === edge.id);
+    const priority = { error: 3, warning: 2, info: 1 };
+    const validation = issues.filter((issue) => issue.edgeId === edge.id)
+      .sort((a, b) => priority[b.severity] - priority[a.severity])[0];
     const color = validation?.severity === 'error' ? '#f87171' : validation?.severity === 'warning' ? '#fbbf24' : '#f5f5f5';
     return {
       ...edge,
@@ -368,17 +374,25 @@ function InfraCanvasApp() {
   const [focusedNodeId, setFocusedNodeId] = useState<string>();
   const [focusedEdgeId, setFocusedEdgeId] = useState<string>();
   const [generatedFiles, setGeneratedFiles] = useState<Record<string, string>>();
+  const [isGuideOpen, setIsGuideOpen] = useState(false);
+  const [walkthroughStep, setWalkthroughStep] = useState<WalkthroughStepId>();
   const [projects, setProjects] = useState<SavedProject[]>(() => initialBoardRef.current.projects);
   const [activeProjectId, setActiveProjectId] = useState<string | undefined>(() => initialBoardRef.current.activeProjectId);
   const [savedSnapshot, setSavedSnapshot] = useState(() => initialBoardRef.current.savedSnapshot);
   const [pendingBoardAction, setPendingBoardAction] = useState<PendingBoardAction>();
   const undoStackRef = useRef<GraphModel[]>([]);
   const redoStackRef = useRef<GraphModel[]>([]);
-  const { screenToFlowPosition } = useReactFlow();
+  const nodeGestureRef = useRef(false);
+  const practiceBucketStartYRef = useRef(0);
+  const { screenToFlowPosition, getViewport, setViewport } = useReactFlow();
+  const practiceReturnRef = useRef<{
+    nodes: InfraNode[]; edges: InfraEdge[]; viewport: Viewport;
+    selectedNodeId?: string; selectedEdgeId?: string; focusedNodeId?: string; focusedEdgeId?: string;
+  } | undefined>(undefined);
 
   const currentGraph = useMemo(() => toGraph(nodes, edges), [nodes, edges]);
   const currentSnapshot = useMemo(() => graphSnapshot(currentGraph), [currentGraph]);
-  const isDirty = currentSnapshot !== savedSnapshot;
+  const isDirty = !walkthroughStep && currentSnapshot !== savedSnapshot;
   const hasBoardContent = !isGraphEmpty(currentGraph);
   const selectedNode = useMemo(() => nodes.find((node) => node.id === selectedNodeId), [nodes, selectedNodeId]);
   const selectedEdge = useMemo(() => edges.find((edge) => edge.id === selectedEdgeId), [edges, selectedEdgeId]);
@@ -398,8 +412,15 @@ function InfraCanvasApp() {
   );
 
   useEffect(() => {
+    if (walkthroughStep) return;
     window.localStorage.setItem(BOARD_STORAGE_KEY, currentSnapshot);
     window.localStorage.setItem(DRAFT_STORAGE_KEY, currentSnapshot);
+  }, [currentSnapshot, walkthroughStep]);
+
+  useEffect(() => {
+    const nextIssues = validateGraph(currentGraph);
+    setIssues(nextIssues);
+    setEdges((current) => decorateEdges(current, nextIssues, nodes));
   }, [currentSnapshot]);
 
   useEffect(() => {
@@ -423,9 +444,53 @@ function InfraCanvasApp() {
   }, [isDirty, hasBoardContent]);
 
   const pushHistory = useCallback(() => {
+    if (walkthroughStep) return;
     undoStackRef.current = [...undoStackRef.current.slice(-HISTORY_LIMIT + 1), currentGraph];
     redoStackRef.current = [];
-  }, [currentGraph]);
+  }, [currentGraph, walkthroughStep]);
+
+  function startWalkthrough() {
+    if (walkthroughStep) return;
+    practiceReturnRef.current = { nodes, edges, viewport: getViewport(), selectedNodeId, selectedEdgeId, focusedNodeId, focusedEdgeId };
+    setNodes([]);
+    setEdges([]);
+    setSelectedNodeId(undefined);
+    setSelectedEdgeId(undefined);
+    setFocusedNodeId(undefined);
+    setFocusedEdgeId(undefined);
+    setGeneratedFiles(undefined);
+    setIsGuideOpen(false);
+    setWalkthroughStep('welcome');
+  }
+
+  const closeWalkthrough = useCallback(() => {
+    const previous = practiceReturnRef.current;
+    if (!previous) return;
+    setNodes(previous.nodes);
+    setEdges(previous.edges);
+    setSelectedNodeId(previous.selectedNodeId);
+    setSelectedEdgeId(previous.selectedEdgeId);
+    setFocusedNodeId(previous.focusedNodeId);
+    setFocusedEdgeId(previous.focusedEdgeId);
+    setGeneratedFiles(undefined);
+    setWalkthroughStep(undefined);
+    nodeGestureRef.current = false;
+    practiceReturnRef.current = undefined;
+    requestAnimationFrame(() => {
+      void setViewport(previous.viewport);
+      document.querySelector<HTMLButtonElement>('[data-tour="default-project"]')?.focus();
+    });
+  }, [setViewport]);
+
+  const advanceWalkthrough = useCallback(() => {
+    if (!walkthroughStep) return;
+    const next = nextWalkthroughStep(walkthroughStep);
+    if (next !== 'configure-route' && next !== 'choose-grant') {
+      setSelectedNodeId(undefined);
+      setSelectedEdgeId(undefined);
+    }
+    setWalkthroughStep(next);
+  }, [walkthroughStep]);
 
   const applyBoard = useCallback((nextNodes: InfraNode[], nextEdges: InfraEdge[], options: { record?: boolean } = {}) => {
     if (options.record) pushHistory();
@@ -474,7 +539,7 @@ function InfraCanvasApp() {
       const target = event.target as HTMLElement | null;
       const isEditing =
         target?.tagName === 'INPUT' || target?.tagName === 'TEXTAREA' || target?.tagName === 'SELECT' || target?.isContentEditable;
-      if (isEditing || !event.metaKey || event.key.toLowerCase() !== 'z') return;
+      if (walkthroughStep || isEditing || !event.metaKey || event.key.toLowerCase() !== 'z') return;
       event.preventDefault();
       if (event.shiftKey) redo();
       else undo();
@@ -482,23 +547,40 @@ function InfraCanvasApp() {
 
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [undo, redo]);
+  }, [undo, redo, walkthroughStep]);
 
   const onNodesChange = useCallback((changes: NodeChange<InfraNode>[]) => {
-    if (changes.some((change) => change.type === 'add' || change.type === 'remove' || change.type === 'position' || change.type === 'dimensions')) {
+    if (walkthroughStep) {
+      changes = changes.filter((change) => change.type === 'dimensions' || change.type === 'select'
+        || (change.type === 'position' && walkthroughStep === 'move-bucket' && change.id === practiceNodeIds.s3));
+      const dropped = changes.find((change) => change.type === 'position' && change.dragging === false);
+      const bucket = nodes.find((node) => node.id === practiceNodeIds.s3);
+      if (walkthroughStep === 'move-bucket' && dropped?.type === 'position' && bucket
+        && (dropped.position?.y ?? bucket.position.y) >= practiceBucketStartYRef.current + 50) advanceWalkthrough();
+    }
+    const structuralChange = changes.some((change) => change.type === 'add' || change.type === 'remove');
+    const geometryChange = changes.some((change) => change.type === 'position' || change.type === 'dimensions');
+    const gestureInProgress = changes.some((change) =>
+      (change.type === 'position' && change.dragging) || (change.type === 'dimensions' && change.resizing));
+    if (structuralChange || (geometryChange && !nodeGestureRef.current && gestureInProgress)
+      || (geometryChange && !gestureInProgress && !nodeGestureRef.current
+        && changes.some((change) => change.type === 'position'))) {
       pushHistory();
     }
+    if (geometryChange) nodeGestureRef.current = gestureInProgress;
     setNodes((current) => applyNodeChanges(changes, current));
-  }, [pushHistory]);
+  }, [pushHistory, walkthroughStep, nodes, advanceWalkthrough]);
 
   const onEdgesChange = useCallback((changes: EdgeChange<InfraEdge>[]) => {
+    if (walkthroughStep) changes = changes.filter((change) => change.type === 'select');
     if (changes.some((change) => change.type === 'add' || change.type === 'remove')) {
       pushHistory();
     }
     setEdges((current) => routeEdges(applyEdgeChanges(changes, current), nodes));
-  }, [nodes, pushHistory]);
+  }, [nodes, pushHistory, walkthroughStep]);
 
   const onConnect = useCallback((connection: Connection) => {
+    if (walkthroughStep && !allowsPracticeConnection(walkthroughStep, connection.source, connection.target)) return;
     const source = nodes.find((node) => node.id === connection.source);
     const target = nodes.find((node) => node.id === connection.target);
     if (source?.data.resourceType === 'textBoard' || target?.data.resourceType === 'textBoard') return;
@@ -506,14 +588,15 @@ function InfraCanvasApp() {
     const connectedResource =
       source?.data.resourceType === 'lambda' ? target : target?.data.resourceType === 'lambda' ? source : undefined;
     const autoEnvVar = connectedResource ? envVarForConnectedResource(connectedResource) : undefined;
+    const connectionType = getDefaultConnectionType(source?.data.resourceType, target?.data.resourceType);
     pushHistory();
     setEdges((current) =>
       routeEdges(
         addEdge(
           {
             ...connection,
-            id: `edge-${connection.source}-${connection.target}-${Date.now()}`,
-            data: { connectionType: 'permission', cdkAction: getDefaultCdkAction(source?.data.resourceType, target?.data.resourceType, 'permission') },
+            id: walkthroughStep ? (walkthroughStep === 'connect-api' ? 'practice-integration' : 'practice-permission') : `edge-${connection.source}-${connection.target}-${Date.now()}`,
+            data: { connectionType, cdkAction: getDefaultCdkAction(source?.data.resourceType, target?.data.resourceType, connectionType) },
             type: 'smoothstep',
             pathOptions: { borderRadius: 14, offset: 24 },
             style: { stroke: '#f5f5f5', strokeWidth: 3 },
@@ -539,16 +622,23 @@ function InfraCanvasApp() {
         ),
       );
     }
-  }, [nodes, pushHistory]);
+    if (walkthroughStep) advanceWalkthrough();
+  }, [nodes, pushHistory, walkthroughStep, advanceWalkthrough]);
 
   const addResourceAt = useCallback(
     (type: string, position: { x: number; y: number }) => {
       const resource = resourceByType[type as AwsResourceType];
       if (!resource) return;
+      if (walkthroughStep && expectedResource(walkthroughStep) !== type) return;
+      const practice = walkthroughStep ? practiceResources[type as keyof typeof practiceResources] : undefined;
 
       const sameTypeCount = nodes.filter((node) => node.data.resourceType === type).length + 1;
-      const id = `${type}-${Date.now()}`;
-      const label = nodeName(type as AwsResourceType, sameTypeCount);
+      const id = practice?.id || `${type}-${globalThis.crypto?.randomUUID?.() || Date.now()}`;
+      const label = practice?.name || nodeName(type as AwsResourceType, sameTypeCount);
+      if (practice) position = window.innerWidth <= 760
+        ? { x: 0, y: type === 'apiGateway' ? 0 : type === 'lambda' ? 160 : 320 }
+        : { ...practice.position };
+      if (practice && type === 's3') practiceBucketStartYRef.current = position.y;
 
       pushHistory();
       setNodes((current) => [
@@ -565,8 +655,9 @@ function InfraCanvasApp() {
           },
         },
       ]);
+      if (walkthroughStep) advanceWalkthrough();
     },
-    [nodes, pushHistory],
+    [nodes, pushHistory, walkthroughStep, advanceWalkthrough],
   );
 
   const onDropResource = useCallback(
@@ -578,6 +669,8 @@ function InfraCanvasApp() {
   );
 
   function updateNode(nodeId: string, patch: { label?: string; config?: Record<string, string | number | boolean> }) {
+    if (walkthroughStep && (walkthroughStep !== 'configure-route' || nodeId !== practiceNodeIds.lambda
+      || patch.label !== undefined || Object.keys(patch.config || {}).some((key) => key !== 'apiPath'))) return;
     pushHistory();
     setNodes((current) =>
       current.map((node) =>
@@ -596,6 +689,7 @@ function InfraCanvasApp() {
   }
 
   function updateEdge(edgeId: string, patch: { connectionType?: string; cdkAction?: string }) {
+    if (walkthroughStep && (walkthroughStep !== 'choose-grant' || edgeId !== 'practice-permission' || patch.cdkAction !== 'grantPut' || patch.connectionType)) return;
     pushHistory();
     setEdges((current) =>
       routeEdges(current.map((edge) =>
@@ -629,6 +723,7 @@ function InfraCanvasApp() {
   }
 
   function saveCurrentProject() {
+    if (walkthroughStep) return false;
     const existingProject = projects.find((project) => project.id === activeProjectId);
     const fallbackName = existingProject?.name || projectNameFromGraph(currentGraph);
     const name = existingProject?.name || window.prompt('Save this board as', fallbackName)?.trim();
@@ -652,7 +747,10 @@ function InfraCanvasApp() {
 
   function openGraph(graph: GraphModel, nextActiveProjectId?: string, nextSavedSnapshot = graphSnapshot(emptyGraph())) {
     const board = fromGraph(graph);
-    applyBoard(board.nodes, board.edges, { record: true });
+    undoStackRef.current = [];
+    redoStackRef.current = [];
+    nodeGestureRef.current = false;
+    applyBoard(board.nodes, board.edges);
     setActiveProjectId(nextActiveProjectId);
     setSavedSnapshot(nextSavedSnapshot);
   }
@@ -742,6 +840,10 @@ function InfraCanvasApp() {
   async function loadStackFile(file: File) {
     const source = await file.text();
     const board = parseCdkStack(source);
+    if (board.nodes.length === 0) {
+      window.alert('No supported CDK resources were found in this file. The current board was not changed.');
+      return;
+    }
     requestBoardReplacement(() => {
       const graph = toGraph(board.nodes, board.edges);
       openGraph(graph, undefined, graphSnapshot(emptyGraph()));
@@ -749,10 +851,12 @@ function InfraCanvasApp() {
   }
 
   function generateProject() {
+    if (walkthroughStep && walkthroughStep !== 'export') return;
     const freshIssues = validateGraph(toGraph(nodes, edges));
     setIssues(freshIssues);
     setEdges((current) => decorateEdges(current, freshIssues, nodes));
     setGeneratedFiles(generateCdkProject(toGraph(nodes, edges)));
+    if (walkthroughStep) advanceWalkthrough();
   }
 
   function selectIssue(issue: ValidationIssue) {
@@ -766,13 +870,14 @@ function InfraCanvasApp() {
   }
 
   return (
-    <div className="app">
+    <div className={`app ${walkthroughStep ? 'walkthrough-active' : ''}`}>
       <Toolbar
-        onValidate={() => runValidation()}
+        onValidate={() => { runValidation(); if (walkthroughStep === 'validate') advanceWalkthrough(); }}
         onGenerate={generateProject}
         onLoadExample={loadWorkflowExample}
         onLoadStackFile={loadStackFile}
         onSaveProject={saveCurrentProject}
+        onOpenGuide={() => setIsGuideOpen(true)}
       />
       <div className="workspace">
         <Sidebar
@@ -781,6 +886,8 @@ function InfraCanvasApp() {
           isDirty={isDirty}
           onNewBoard={startNewBoard}
           onProjectSelect={selectProject}
+          onOpenDefaultProject={startWalkthrough}
+          isWalkthroughActive={Boolean(walkthroughStep)}
         />
         <div className="main-region">
           <div className="board-region">
@@ -794,7 +901,22 @@ function InfraCanvasApp() {
               onConnect={onConnect}
               onAddResource={addResourceAt}
               onDropResource={onDropResource}
+              isEmpty={nodes.length === 0}
+              onOpenGuide={() => setIsGuideOpen(true)}
+              walkthroughStep={walkthroughStep}
               onSelectionChange={({ nodes: nextNodes, edges: nextEdges }) => {
+                if (walkthroughStep) {
+                  if (walkthroughStep === 'select-lambda' && nextNodes[0]?.id === practiceNodeIds.lambda) {
+                    setSelectedNodeId(practiceNodeIds.lambda);
+                    setSelectedEdgeId(undefined);
+                    advanceWalkthrough();
+                  } else if (walkthroughStep === 'select-permission' && nextEdges[0]?.id === 'practice-permission') {
+                    setSelectedNodeId(undefined);
+                    setSelectedEdgeId('practice-permission');
+                    advanceWalkthrough();
+                  }
+                  return;
+                }
                 setSelectedNodeId(nextNodes[0]?.id);
                 setSelectedEdgeId(nextEdges[0]?.id);
               }}
@@ -803,12 +925,26 @@ function InfraCanvasApp() {
                 setFocusedEdgeId(nextEdges[0]?.id);
               }}
             />
-            <Inspector node={selectedNode} edge={selectedNode ? undefined : selectedEdge} nodes={nodes} onUpdateNode={updateNode} onUpdateEdge={updateEdge} />
+            <Inspector node={selectedNode} edge={selectedNode ? undefined : selectedEdge} nodes={nodes} onUpdateNode={updateNode} onUpdateEdge={updateEdge} practiceAction={walkthroughStep === 'choose-grant' ? 'grantPut' : undefined} />
           </div>
-          <ValidationPanel issues={issues} onIssueSelect={selectIssue} />
+          <ValidationPanel issues={issues} onIssueSelect={selectIssue} practiceExpanded={walkthroughStep ? walkthroughStep === 'review' : undefined} />
         </div>
       </div>
-      {generatedFiles && <CodeModal files={generatedFiles} onClose={() => setGeneratedFiles(undefined)} />}
+      {generatedFiles && <CodeModal files={generatedFiles} onClose={walkthroughStep ? closeWalkthrough : () => setGeneratedFiles(undefined)} />}
+      {walkthroughStep && <ProjectWalkthrough stepId={walkthroughStep} canContinue={canContinueWalkthrough(walkthroughStep, currentGraph)} onContinue={() => {
+        if (!canContinueWalkthrough(walkthroughStep, currentGraph)) return;
+        if (walkthroughStep === 'complete') closeWalkthrough();
+        else advanceWalkthrough();
+      }} onClose={closeWalkthrough} />}
+      {isGuideOpen && (
+        <GuideModal
+          onClose={() => setIsGuideOpen(false)}
+          onOpenSample={() => {
+            setIsGuideOpen(false);
+            loadWorkflowExample();
+          }}
+        />
+      )}
       {pendingBoardAction && (
         <div className="confirm-modal-backdrop" role="presentation">
           <div className="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="confirm-title">

@@ -32,6 +32,7 @@ function uniqueEdge(
   source: string,
   target: string,
   connectionType: string,
+  cdkAction?: string,
 ): InfraEdge[] {
   if (source === target || edges.some((edge) => edge.source === source && edge.target === target && edge.data?.connectionType === connectionType)) {
     return edges;
@@ -49,7 +50,7 @@ function uniqueEdge(
       type: 'smoothstep',
       data: {
         connectionType,
-        cdkAction: getDefaultCdkAction(sourceType, targetType, connectionType),
+        cdkAction: cdkAction || getDefaultCdkAction(sourceType, targetType, connectionType),
       },
       pathOptions: { borderRadius: 14, offset: 24 },
     },
@@ -221,8 +222,9 @@ function resourceConfig(type: AwsResourceType, body: string) {
     if (/versioned:\s*true/.test(body)) config.versioned = 'true';
   }
 
-  if (type === 'dynamodb' && /dynamoStream|stream:\s*dynamodb\.StreamViewType\.NEW_IMAGE/.test(body)) {
-    config.stream = 'NEW_IMAGE';
+  if (type === 'dynamodb') {
+    const stream = body.match(/(?:dynamoStream|stream):\s*dynamodb\.StreamViewType\.(NEW_IMAGE|NEW_AND_OLD_IMAGES)/);
+    config.stream = stream?.[1] || 'DISABLED';
   }
 
   if (type === 'iamRole') {
@@ -237,8 +239,9 @@ function resourceConfig(type: AwsResourceType, body: string) {
 
 export function parseCdkStack(source: string): { nodes: InfraNode[]; edges: InfraEdge[] } {
   const resources: ParsedResource[] = [];
+  const constructs = extractConstructs(source);
 
-  for (const { variable, constructorName, constructId, body } of extractConstructs(source)) {
+  for (const { variable, constructorName, constructId, body } of constructs) {
     const type = findResourceType(`new ${constructorName}`);
     if (!type) continue;
     resources.push({
@@ -271,7 +274,7 @@ export function parseCdkStack(source: string): { nodes: InfraNode[]; edges: Infr
   }
 
   const hasDynamicEc2 =
-    /ec2:RunInstances|RunInstances|iam:PassRole|InstanceProfile|profileName|valueForStringParameter\(.*ami-amazon-linux-latest/s.test(source);
+    /ec2:RunInstances|RunInstances|valueForStringParameter\(.*ami-amazon-linux-latest/s.test(source);
   if (hasDynamicEc2 && !resources.some((resource) => resource.type === 'ec2')) {
     resources.push({
       variable: 'ephemeral-worker-vm',
@@ -301,7 +304,8 @@ export function parseCdkStack(source: string): { nodes: InfraNode[]; edges: Infr
     const resource = nodeByVariable.get(resourceVariable);
     const principal = principalVariable ? nodeByVariable.get(principalVariable) : undefined;
     if (!resource || !principal) continue;
-    edges = uniqueEdge(edges, nodesById, edgeId(`grant${action}`, principal.id, resource.id), principal.id, resource.id, 'permission');
+    const cdkAction = principal.data.resourceType === 'iamRole' ? `grant${action}ToRole` : `grant${action}`;
+    edges = uniqueEdge(edges, nodesById, edgeId(`grant${action}`, principal.id, resource.id), principal.id, resource.id, 'permission', cdkAction);
   }
 
   for (const match of source.matchAll(/([A-Za-z_$][\w$]*)\.grant(ReadWriteData|ReadData|WriteData|FullAccess)\(([^)]+)\)/g)) {
@@ -310,7 +314,8 @@ export function parseCdkStack(source: string): { nodes: InfraNode[]; edges: Infr
     const table = nodeByVariable.get(tableVariable);
     const principal = principalVariable ? nodeByVariable.get(principalVariable) : undefined;
     if (!table || !principal) continue;
-    edges = uniqueEdge(edges, nodesById, edgeId(`grant${action}`, principal.id, table.id), principal.id, table.id, 'permission');
+    const cdkAction = principal.data.resourceType === 'iamRole' ? `grant${action}ToRole` : `grant${action}`;
+    edges = uniqueEdge(edges, nodesById, edgeId(`grant${action}`, principal.id, table.id), principal.id, table.id, 'permission', cdkAction);
   }
 
   for (const match of source.matchAll(/new\s+apigw\.LambdaIntegration\(([^)]+)\)|new\s+apigateway\.LambdaIntegration\(([^)]+)\)/g)) {
@@ -328,10 +333,22 @@ export function parseCdkStack(source: string): { nodes: InfraNode[]; edges: Infr
   }
 
   const vm = variablesByType('ec2')[0];
-  const roles = variablesByType('iamRole');
   if (vm) {
-    roles.forEach((role) => {
-      edges = uniqueEdge(edges, nodesById, edgeId('role-vm', role, vm), role, vm, 'permission');
+    const roleVariables = new Set<string>();
+    constructs.filter((construct) => /(?:^|\.)InstanceProfile$/.test(construct.constructorName))
+      .forEach((construct) => {
+        const role = construct.body.match(/\brole:\s*([A-Za-z_$][\w$]*)/);
+        if (role) roleVariables.add(role[1]);
+      });
+    constructs.filter((construct) => construct.variable === vm && /(?:^|\.)Instance$/.test(construct.constructorName))
+      .forEach((construct) => {
+        const role = construct.body.match(/\brole:\s*([A-Za-z_$][\w$]*)/);
+        if (role) roleVariables.add(role[1]);
+      });
+    roleVariables.forEach((role) => {
+      if (nodeByVariable.get(role)?.data.resourceType === 'iamRole') {
+        edges = uniqueEdge(edges, nodesById, edgeId('role-vm', role, vm), role, vm, 'permission');
+      }
     });
     variablesByType('lambda').forEach((lambda) => {
       const label = nodeByVariable.get(lambda)?.data.label || '';

@@ -5,14 +5,16 @@ import type { ValidationIssue } from '../types';
 type ValidationPanelProps = {
   issues: ValidationIssue[];
   onIssueSelect?: (issue: ValidationIssue) => void;
+  practiceExpanded?: boolean;
 };
 
-export function ValidationPanel({ issues, onIssueSelect }: ValidationPanelProps) {
+export function ValidationPanel({ issues, onIssueSelect, practiceExpanded }: ValidationPanelProps) {
   const [isHidden, setIsHidden] = useState(false);
   const [panelHeight, setPanelHeight] = useState(210);
   const errors = issues.filter((issue) => issue.severity === 'error').length;
   const warnings = issues.filter((issue) => issue.severity === 'warning').length;
   const visibleIssues = issues.filter((issue) => issue.severity !== 'info');
+  const hidden = practiceExpanded === undefined ? isHidden : !practiceExpanded;
 
   function startResize(event: ReactMouseEvent<HTMLDivElement>) {
     if (isHidden) return;
@@ -38,27 +40,27 @@ export function ValidationPanel({ issues, onIssueSelect }: ValidationPanelProps)
   }
 
   return (
-    <section className={`validation-panel ${isHidden ? 'hidden' : ''}`} style={{ height: isHidden ? 42 : panelHeight }}>
-      {!isHidden && <div className="validation-resize-handle" onMouseDown={startResize} />}
+    <section data-tour="validation" className={`validation-panel ${hidden ? 'hidden' : ''}`} style={{ height: hidden ? 42 : panelHeight }}>
+      {!hidden && <div className="validation-resize-handle" onMouseDown={startResize} />}
       <div className="validation-header">
         <div>
           <p className="eyebrow">Validation</p>
-          <h2>{errors ? `${errors} error${errors > 1 ? 's' : ''}` : warnings ? `${warnings} warning${warnings > 1 ? 's' : ''}` : 'Graph looks deployable'}</h2>
+          <h2>{errors ? `${errors} error${errors > 1 ? 's' : ''}` : warnings ? `${warnings} warning${warnings > 1 ? 's' : ''}` : 'No validation findings'}</h2>
         </div>
         <div className="validation-counts">
-          {!isHidden && <span>{errors} errors</span>}
-          {!isHidden && <span>{warnings} warnings</span>}
+          {!hidden && <span>{errors} errors</span>}
+          {!hidden && <span>{warnings} warnings</span>}
           <button
             type="button"
             className="expand-button icon-only"
-            aria-label={isHidden ? 'Show validation panel' : 'Hide validation panel'}
+            aria-label={hidden ? 'Show validation panel' : 'Hide validation panel'}
             onClick={() => setIsHidden((current) => !current)}
           >
-            {isHidden ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
+            {hidden ? <ChevronUp size={17} /> : <ChevronDown size={17} />}
           </button>
         </div>
       </div>
-      {!isHidden && (
+      {!hidden && (
         <div className="issue-list">
           {visibleIssues.length === 0 ? (
             <article className="issue empty-validation">

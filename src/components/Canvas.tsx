@@ -13,12 +13,13 @@ import {
   type OnNodesChange,
   type XYPosition,
 } from "@xyflow/react";
-import { Expand, LocateFixed, Lock, Minus, Plus, Unlock } from "lucide-react";
+import { BookOpen, Expand, LocateFixed, Lock, Minus, Plus, Unlock } from "lucide-react";
 import type { DragEvent } from "react";
 import { useEffect, useRef, useState } from "react";
 import { InfraNode } from "./InfraNode";
 import { awsResources, resourceByType } from "../data/awsResources";
 import type { InfraEdge, InfraNode as InfraNodeType } from "../types";
+import { allowsPracticeConnection, expectedResource, practiceNodeIds, type WalkthroughStepId } from '../walkthrough/defaultProject';
 
 const nodeTypes = { infraNode: InfraNode };
 
@@ -40,6 +41,9 @@ type CanvasProps = {
     nodes: InfraNodeType[];
     edges: InfraEdge[];
   }) => void;
+  isEmpty: boolean;
+  onOpenGuide: () => void;
+  walkthroughStep?: WalkthroughStepId;
 };
 
 export function Canvas({
@@ -54,6 +58,9 @@ export function Canvas({
   onDropResource,
   onSelectionChange,
   onFocusChange,
+  isEmpty,
+  onOpenGuide,
+  walkthroughStep,
 }: CanvasProps) {
   const { fitView, screenToFlowPosition, setCenter, zoomIn, zoomOut } =
     useReactFlow<InfraNodeType, InfraEdge>();
@@ -63,6 +70,24 @@ export function Canvas({
   const [isPaletteOpen, setIsPaletteOpen] = useState(false);
   const selectedNode = nodes.find((node) => node.id === selectedNodeId);
   const selectedEdge = edges.find((edge) => edge.id === selectedEdgeId);
+
+  useEffect(() => {
+    if (!walkthroughStep || walkthroughStep === 'welcome') {
+      setIsPaletteOpen(false);
+      setIsLocked(false);
+    }
+  }, [walkthroughStep]);
+
+  useEffect(() => {
+    if (!walkthroughStep || nodes.length === 0) return;
+    const timer = window.setTimeout(() => void fitView({ padding: 0.25, maxZoom: 1, duration: 220 }), 100);
+    return () => clearTimeout(timer);
+  }, [walkthroughStep, nodes.length, fitView]);
+
+  useEffect(() => {
+    if (!isPaletteOpen || !walkthroughStep) return;
+    shellRef.current?.querySelector(`[data-resource="${expectedResource(walkthroughStep)}"]`)?.scrollIntoView({ block: 'nearest' });
+  }, [isPaletteOpen, walkthroughStep]);
 
   useEffect(() => {
     if (selectedNode) {
@@ -135,7 +160,12 @@ export function Canvas({
       ref={shellRef}
     >
       <ReactFlow
-        nodes={nodes}
+        nodes={walkthroughStep ? nodes.map((node) => ({
+          ...node,
+          draggable: walkthroughStep === 'move-bucket' && node.id === practiceNodeIds.s3,
+          selectable: walkthroughStep === 'select-lambda' && node.id === practiceNodeIds.lambda,
+          connectable: walkthroughStep === 'connect-api' || walkthroughStep === 'connect-bucket',
+        })) : nodes}
         edges={edges}
         nodeTypes={nodeTypes}
         onNodesChange={
@@ -145,14 +175,13 @@ export function Canvas({
           onEdgesChange as (changes: EdgeChange<InfraEdge>[]) => void
         }
         onConnect={(connection: Connection) => onConnect(connection)}
+        isValidConnection={walkthroughStep ? (connection) => allowsPracticeConnection(walkthroughStep, connection.source, connection.target) : undefined}
         connectionMode={ConnectionMode.Loose}
         onSelectionChange={onSelectionChange}
-        onNodeDoubleClick={(_, node) =>
-          onFocusChange({ nodes: [node], edges: [] })
-        }
-        onEdgeDoubleClick={(_, edge) =>
-          onFocusChange({ nodes: [], edges: [edge] })
-        }
+        onNodeClick={walkthroughStep ? (_, node) => onSelectionChange({ nodes: [node], edges: [] }) : undefined}
+        onEdgeClick={walkthroughStep ? (_, edge) => onSelectionChange({ nodes: [], edges: [edge] }) : undefined}
+        onNodeDoubleClick={(_, node) => { if (!walkthroughStep) onFocusChange({ nodes: [node], edges: [] }); }}
+        onEdgeDoubleClick={(_, edge) => { if (!walkthroughStep) onFocusChange({ nodes: [], edges: [edge] }); }}
         onPaneClick={() => {
           onSelectionChange({ nodes: [], edges: [] });
           onFocusChange({ nodes: [], edges: [] });
@@ -171,11 +200,11 @@ export function Canvas({
         nodesDraggable={!isLocked}
         nodesConnectable={!isLocked}
         elementsSelectable={!isLocked}
-        panOnDrag={!isLocked}
-        zoomOnDoubleClick={!isLocked}
-        zoomOnPinch={!isLocked}
-        zoomOnScroll={!isLocked}
-        deleteKeyCode={["Backspace", "Delete"]}
+        panOnDrag={!isLocked && !walkthroughStep}
+        zoomOnDoubleClick={!isLocked && !walkthroughStep}
+        zoomOnPinch={!isLocked && !walkthroughStep}
+        zoomOnScroll={!isLocked && !walkthroughStep}
+        deleteKeyCode={walkthroughStep ? null : ["Backspace", "Delete"]}
         connectionLineStyle={{ stroke: "#f5f5f5", strokeWidth: 3 }}
         defaultEdgeOptions={{
           type: "smoothstep",
@@ -188,6 +217,7 @@ export function Canvas({
           <button
             type="button"
             className="canvas-add-button"
+            data-tour="add-component"
             aria-label="Add component"
             title="Add component"
             onClick={() => setIsPaletteOpen((current) => !current)}
@@ -208,6 +238,8 @@ export function Canvas({
                       type="button"
                       key={resource.type}
                       className="canvas-palette-item"
+                      data-resource={resource.type}
+                      disabled={Boolean(walkthroughStep && expectedResource(walkthroughStep) !== resource.type)}
                       onClick={() => addResourceFromPalette(resource.type)}
                     >
                       <span
@@ -291,6 +323,14 @@ export function Canvas({
           </button>
         </Panel>
       </ReactFlow>
+      {isEmpty && !walkthroughStep && (
+        <div className="canvas-empty-state">
+          <BookOpen size={23} aria-hidden="true" />
+          <h2>Start with an AWS flow</h2>
+          <p>Build your first CDK graph step by step, or use + to add a component.</p>
+          <button type="button" onClick={onOpenGuide}>Open quick guide</button>
+        </div>
+      )}
     </main>
   );
 }

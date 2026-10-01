@@ -1,4 +1,4 @@
-import { Download, FileCode2, GitBranch, Save, ShieldCheck } from 'lucide-react';
+import { CircleHelp, Download, FileCode2, GitBranch, Save, ShieldCheck } from 'lucide-react';
 import { useRef } from 'react';
 
 type ToolbarProps = {
@@ -7,6 +7,7 @@ type ToolbarProps = {
   onLoadExample: () => void;
   onLoadStackFile: (file: File) => void | Promise<void>;
   onSaveProject: () => void;
+  onOpenGuide: () => void;
 };
 
 export function Toolbar({
@@ -15,6 +16,7 @@ export function Toolbar({
   onLoadExample,
   onLoadStackFile,
   onSaveProject,
+  onOpenGuide,
 }: ToolbarProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -28,15 +30,19 @@ export function Toolbar({
         </div>
       </div>
       <nav className="toolbar-actions">
+        <button type="button" onClick={onOpenGuide}>
+          <CircleHelp size={17} />
+          Guide
+        </button>
         <button type="button" onClick={onSaveProject}>
           <Save size={17} />
           Save
         </button>
-        <button type="button" onClick={onValidate}>
+        <button type="button" data-tour="validate" onClick={onValidate}>
           <ShieldCheck size={17} />
           Validate
         </button>
-        <button type="button" className="primary" onClick={onGenerate}>
+        <button type="button" className="primary" data-tour="generate" onClick={onGenerate}>
           <Download size={17} />
           Generate CDK
         </button>

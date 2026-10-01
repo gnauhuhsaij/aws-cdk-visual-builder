@@ -399,6 +399,22 @@ export function getDefaultCdkAction(sourceType?: AwsResourceType, targetType?: A
   return getCdkActionOptions(sourceType, targetType, connectionType)[0]?.value;
 }
 
+export function getDefaultConnectionType(sourceType?: AwsResourceType, targetType?: AwsResourceType): ConnectionType {
+  if (!sourceType || !targetType) return 'permission';
+  const preferred: Record<string, ConnectionType> = {
+    'webClient->apiGateway': 'integration',
+    'apiGateway->lambda': 'integration',
+    's3->lambda': 'trigger',
+    'sqs->lambda': 'trigger',
+    'dynamodb->lambda': 'trigger',
+    'eventBridge->lambda': 'trigger',
+    'eventBridge->sqs': 'trigger',
+    'scriptAsset->s3': 'integration',
+    'iamRole->lambda': 'integration',
+  };
+  return preferred[`${sourceType}->${targetType}`] || 'permission';
+}
+
 export function getCdkActionOption(sourceType?: AwsResourceType, targetType?: AwsResourceType, connectionType?: string, value?: string) {
   const options = getCdkActionOptions(sourceType, targetType, connectionType);
   return options.find((option) => option.value === value) || options[0];

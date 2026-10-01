@@ -1,4 +1,4 @@
-import { Plus } from 'lucide-react';
+import { BookOpen, Plus } from 'lucide-react';
 import type { SavedProjectSummary } from '../types';
 
 type SidebarProps = {
@@ -7,13 +7,15 @@ type SidebarProps = {
   isDirty: boolean;
   onNewBoard: () => void;
   onProjectSelect: (projectId: string) => void;
+  onOpenDefaultProject: () => void;
+  isWalkthroughActive: boolean;
 };
 
 function formatUpdatedAt(value: number) {
   return new Intl.DateTimeFormat(undefined, { month: 'short', day: 'numeric' }).format(value);
 }
 
-export function Sidebar({ projects, activeProjectId, isDirty, onNewBoard, onProjectSelect }: SidebarProps) {
+export function Sidebar({ projects, activeProjectId, isDirty, onNewBoard, onProjectSelect, onOpenDefaultProject, isWalkthroughActive }: SidebarProps) {
   return (
     <aside className="sidebar project-sidebar">
       <div className="project-sidebar-header">
@@ -27,6 +29,10 @@ export function Sidebar({ projects, activeProjectId, isDirty, onNewBoard, onProj
         New board
       </button>
       <div className="project-history-list">
+        <button type="button" data-tour="default-project" className={`history-project history-default ${isWalkthroughActive ? 'active' : ''}`} onClick={onOpenDefaultProject}>
+          <span><BookOpen size={15} /> Default project</span>
+          <small>Guided practice</small>
+        </button>
         {projects.length === 0 ? (
           <p className="history-empty">Saved boards will appear here.</p>
         ) : (
@@ -34,7 +40,7 @@ export function Sidebar({ projects, activeProjectId, isDirty, onNewBoard, onProj
             <button
               type="button"
               key={project.id}
-              className={`history-project ${project.id === activeProjectId ? 'active' : ''}`}
+              className={`history-project ${!isWalkthroughActive && project.id === activeProjectId ? 'active' : ''}`}
               onClick={() => onProjectSelect(project.id)}
             >
               <span>{project.name}</span>

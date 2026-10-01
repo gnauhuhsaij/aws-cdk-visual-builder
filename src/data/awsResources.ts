@@ -65,7 +65,7 @@ export const awsResources: ResourceDefinition[] = [
     color: '#da6f13',
     Icon: CloudLightning,
     defaultConfig: {
-      runtime: 'nodejs20.x',
+      runtime: 'nodejs24.x',
       handler: 'handler',
       memorySize: 128,
       purpose: 'generic',
@@ -81,7 +81,7 @@ export const awsResources: ResourceDefinition[] = [
         type: 'select',
         options: ['generic', 'healthcheck', 'presigned-url', 'dynamodb-writer', 'ec2-launcher'],
       },
-      { key: 'runtime', label: 'Runtime', type: 'select', options: ['nodejs20.x', 'python3.12', 'java21'] },
+      { key: 'runtime', label: 'Runtime', type: 'select', options: ['nodejs24.x', 'nodejs22.x', 'nodejs20.x', 'python3.12', 'java21'] },
       { key: 'handler', label: 'Handler', type: 'text' },
       { key: 'entry', label: 'Nodejs entry', type: 'text' },
       { key: 'apiPath', label: 'API route path', type: 'text' },

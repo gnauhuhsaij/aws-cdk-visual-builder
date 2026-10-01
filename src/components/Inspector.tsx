@@ -12,6 +12,7 @@ type InspectorProps = {
   nodes: InfraNode[];
   onUpdateNode: (nodeId: string, patch: { label?: string; config?: Record<string, string | number | boolean> }) => void;
   onUpdateEdge: (edgeId: string, patch: { connectionType?: string; cdkAction?: string }) => void;
+  practiceAction?: string;
 };
 
 type DetailTopic = {
@@ -56,7 +57,7 @@ const fieldDetails: Partial<Record<`${AwsResourceType}.${string}`, DetailTopic>>
   },
   'lambda.runtime': {
     title: 'Runtime',
-    body: 'The language runtime AWS Lambda uses to execute the function code, such as Node.js 20.x or Python 3.12.',
+    body: 'The language runtime AWS Lambda uses to execute the function code. InfraCanvas currently generates Node.js Lambda handlers; other runtimes need manual CDK and handler changes.',
   },
   'lambda.handler': {
     title: 'Handler',
@@ -278,7 +279,7 @@ function EnvVarsEditor({ value, onChange }: { value: unknown; onChange: (nextVal
   );
 }
 
-export function Inspector({ node, edge, nodes, onUpdateNode, onUpdateEdge }: InspectorProps) {
+export function Inspector({ node, edge, nodes, onUpdateNode, onUpdateEdge, practiceAction }: InspectorProps) {
   const [detailTopic, setDetailTopic] = useState<DetailTopic>();
   const source = edge ? nodes.find((item) => item.id === edge.source) : undefined;
   const target = edge ? nodes.find((item) => item.id === edge.target) : undefined;
@@ -313,7 +314,7 @@ export function Inspector({ node, edge, nodes, onUpdateNode, onUpdateEdge }: Ins
         </label>
         <div className="field-grid">
           {resource.configFields.map((field) => (
-            <label key={field.key}>
+            <label key={field.key} data-tour={`field-${field.key}`}>
               <span className="field-label">
                 {field.label}
                 <DetailButton onClick={() => setDetailTopic(resourceFieldDetail(resource.type, resource.label, field.label, field.key))} />
@@ -365,7 +366,7 @@ export function Inspector({ node, edge, nodes, onUpdateNode, onUpdateEdge }: Ins
           <strong>to</strong>
           <span>{target?.data.label || edge.target}</span>
         </div>
-        <label>
+        <label data-tour="connection-type">
           <span className="field-label">
             Connection type
             <DetailButton onClick={() => setDetailTopic(connectionTypeDetails)} />
@@ -377,7 +378,7 @@ export function Inspector({ node, edge, nodes, onUpdateNode, onUpdateEdge }: Ins
             <option value="network">Network access</option>
           </select>
         </label>
-        <label>
+        <label data-tour="cdk-action">
           <span className="field-label">
             CDK action
             <DetailButton onClick={() => setDetailTopic(cdkActionTopic)} />
@@ -389,7 +390,7 @@ export function Inspector({ node, edge, nodes, onUpdateNode, onUpdateEdge }: Ins
           >
             {cdkActions.length ? (
               cdkActions.map((action) => (
-                <option key={action.value} value={action.value}>
+                <option key={action.value} value={action.value} disabled={Boolean(practiceAction && action.value !== practiceAction)}>
                   {action.label}
                 </option>
               ))

@@ -42,7 +42,7 @@ export function CodeModal({ files, onClose }: CodeModalProps) {
 
   return (
     <div className="modal-backdrop" role="dialog" aria-modal="true">
-      <div className="code-modal">
+      <div className="code-modal" data-tour="generated-code">
         <div className="modal-header">
           <div>
             <p className="eyebrow">Generated CDK Project</p>
