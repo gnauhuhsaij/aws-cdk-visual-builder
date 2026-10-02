@@ -1,4 +1,4 @@
-# InfraCanvas
+# CDKCanvas: Visual AWS CDK Builder
 
 InfraCanvas helps you design AWS infrastructure visually and turn it into TypeScript AWS CDK code. It is built for people who know AWS services and want an easier way to understand how those services connect in CDK.
 
